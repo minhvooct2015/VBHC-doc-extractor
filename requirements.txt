@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+ultralytics
+vietocr
+pdf2image
+Pillow==10.2.0
+torch           # hoặc torch==version-phù-hợp với GPU/CPU
+torchvision
+pyngrok
+python-multipart   # để upload file với FastAPI
+opencv-python
+numpy
+loguru            # nếu cần thêm logging, không bắt buộc
