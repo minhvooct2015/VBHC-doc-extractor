@@ -1,0 +1,106 @@
+git clone https://github.com/minhvooct2015/VBHC-doc-extractor.git
+
+https://github.com/copilot/c/e2bdfd30-63dc-4b1f-9977-bad7c86bcfca
+
+
+source myenv/bin/activate
+vanban@res38:~$ source myenv/bin/activate
+(myenv) vanban@res38:~$ deactivate
+
+ssh vanban@172.18.54.38
+
+cd ~
+git clone https://github.com/minhvooct2015/VBHC-doc-extractor.git
+cd VBHC-doc-extractor
+
+sudo apt-get update -y
+sudo apt-get install -y python3 python3-venv python3-pip
+sudo apt-get install -y poppler-utils
+
+cd ~
+python3 -m venv myenv
+source ~/myenv/bin/activate
+
+cd ~/VBHC-doc-extractor
+pip install -r requirements.txt   # nếu có
+
+
+# kích hoạt venv (ngoài repo)
+source myenv/bin/activate
+
+cd ~/VBHC-doc-extractor
+uvicorn app:app --host 0.0.0.0 --port 8000
+
+
+
+curl -X POST "http://127.0.0.1:8000/extract" \
+  -F "file=@sample.pdf"
+
+3. Tạo systemd service (venv ngoài repo)
+File /etc/systemd/system/vbhc_ocr.service:
+
+sudo nano /etc/systemd/system/vbhc_ocr.service
+                  
+[Unit]
+Description=VBHC OCR FastAPI service
+After=network.target
+
+[Service]
+User=vanban
+WorkingDirectory=/home/vanban/VBHC-doc-extractor
+Environment="PATH=/home/vanban/myenv/bin:/usr/bin"
+ExecStart=/home/vanban/myenv/bin/uvicorn app:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+
+Sau đó:
+sudo systemctl daemon-reload
+sudo systemctl enable vbhc_ocr
+sudo systemctl start vbhc_ocr
+sudo systemctl status vbhc_ocr
+
+
+# Xem trạng thái
+sudo systemctl status vbhc_ocr
+
+# Restart khi đổi code / model
+sudo systemctl restart vbhc_ocr
+
+# Dừng service
+sudo systemctl stop vbhc_ocr
+
+ Dùng pwd sau khi SSH để xác định PATH
+ SSH vào.
+Gõ pwd để xem thư mục hiện tại (thường là /home/vanban).
+Dùng đường dẫn này trong WorkingDirectory và Environment.
+
+
+sudo journalctl -u vbhc_ocr -n 100 --no-pager
+-u vbhc_ocr: log của service này
+
+-n 100: 100 dòng cuối
+
+Bỏ -n 100 để xem từ đầu:
+
+bash
+sudo journalctl -u vbhc_ocr --no-pager
+Xem realtime (như tail -f):
+
+bash
+sudo journalctl -u vbhc_ocr -f
+
+
+Log này cho thấy 2 chuyện quan trọng:
+
+API xử lý rất lâu và rất nặng (PDF 33 trang, ảnh 3505×2480).
+Service bị OS kill vì hết RAM/SWAP, không phải vì timeout HTTP.
+
+10:17:51 pdf_to_images called với /tmp/tmp49g9fo8c.pdf
+10:19:57 Converted PDF ... to 33 images in 126.047s   # ~2 phút chỉ để convert PDF → ảnh
+10:19:58 Saving YOLO structure ...
+10:20:51 DEBUG Image[0..32] shape: (3505, 2480, 3)
+10:21:35 vbhc_ocr.service: Main process exited, code=killed, status=9/KILL
+10:21:35 vbhc_ocr.service: Consumed 34.647s CPU time, 1.6G memory peak, 1.5G memory swap peak.

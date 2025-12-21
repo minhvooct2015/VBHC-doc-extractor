@@ -1,0 +1,88 @@
+Bạn có thể deploy thêm một service Java (Quarkus) trên cùng server với service Python/FastAPI hiện tại, miễn là:
+
+Máy đủ tài nguyên (RAM/CPU/GPU nếu dùng).
+Bạn tách port và service rõ ràng.
+Dưới đây là cách làm tổng quan, bạn có thể áp dụng cho repo Quarkus trên GitHub.
+
+1. Nguyên tắc chung khi chạy nhiều service trên một server
+Mỗi service:
+Chạy trên port khác nhau (ví dụ: Python: 8000, Quarkus: 8080).
+Có systemd service riêng (vbhc_ocr, quarkus_app, …).
+Nginx (hoặc reverse proxy khác) có thể:
+Route theo đường dẫn:
+/ocr/* → Python (8000)
+/java/* → Quarkus (8080)
+Hoặc theo subdomain:
+ocr.domain.com → Python
+api.domain.com → Quarkus
+Không có xung đột nếu bạn:
+
+Không để 2 app nghe cùng một port.
+Không dùng chung systemd unit name.
+
+
+ssh vanban@172.18.54.38
+
+. Các bước cơ bản để deploy Quarkus trên cùng server
+cd ~
+git clone https://github.com/<owner>/<quarkus-repo>.git
+cd <quarkus-repo>
+
+Cài Java & Maven (hoặc Gradle)
+
+
+sudo apt-get update
+sudo apt-get install -y openjdk-21-jdk
+
+java -version
+
+openjdk version "21.0.x" 2023-09-19
+OpenJDK Runtime Environment ...
+OpenJDK 64-Bit Server VM ...
+
+
+java -version
+
+sudo apt-get install -y maven
+
+mvn -version
+
+cd ~/your-quarkus-project
+
+# nếu là Maven
+./mvnw clean package
+# hoặc
+mvn clean package
+Sau khi build, thường sẽ có jar kiểu:
+
+target/<tên-app>-runner.jar
+java -jar target/quarkus-app/quarkus-run.jar
+# hoặc đúng tên jar của bạn
+
+curl http://127.0.0.1:8080/q/health || curl http://127.0.0.1:8080/
+
+3. Đưa Quarkus vào systemd (chạy nền như Python app)
+Tạo file service, ví dụ /etc/systemd/system/quarkus_app.service:
+
+[Unit]
+Description=Quarkus Java API service
+After=network.target
+
+[Service]
+User=vanban
+WorkingDirectory=/home/vanban/your-quarkus-project
+ExecStart=/usr/bin/java -jar /home/vanban/your-quarkus-project/target/quarkus-app/quarkus-run.jar
+Restart=always
+RestartSec=5
+Environment="JAVA_OPTS=-Xms512m -Xmx1024m"   # tuỳ chọn, nếu cần
+
+[Install]
+WantedBy=multi-user.target
+
+Sau đó:
+
+bash
+sudo systemctl daemon-reload
+sudo systemctl enable quarkus_app
+sudo systemctl start quarkus_app
+sudo systemctl status quarkus_app

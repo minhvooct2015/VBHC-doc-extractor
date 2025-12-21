@@ -113,8 +113,8 @@ def classify_by_detection(detected_classes: List[str]) -> int:
     if any(c in detected_classes for c in ["signatory", "signatoryPosition"]):
         return 1
     return 2
-
-def pdf_to_images(pdf_path_or_file: Union[str, Path, IO[bytes]], dpi=300):
+# Đề xuất: dùng DPI thấp hơn (150–200) mặc định, đủ tốt cho OCR nhưng nhẹ RAM hơn rất nhiều:
+def pdf_to_images(pdf_path_or_file: Union[str, Path, IO[bytes]], dpi=200):
     logger.debug("pdf_to_images called with %s (type=%s) dpi=%d", getattr(pdf_path_or_file, "name", str(pdf_path_or_file)), type(pdf_path_or_file), dpi)
     # Accept path or file-like object
     t0 = time.time()
@@ -151,36 +151,97 @@ def is_image_file(filepath_or_file):
         logger.debug("Path extension '%s' -> is_image=%s", ext, is_img)
         return is_img
 
-def batch_detect_images(model, pil_images: List[Image.Image]):
-    logger.debug("batch_detect_images called with %d images", len(pil_images))
-    np_images = [np.array(img.convert('RGB')) for img in pil_images]
-    for i, np_img in enumerate(np_images):
-        logger.debug("Image[%d] shape: %s dtype=%s", i, np_img.shape, np_img.dtype)
-    t0 = time.time()
-    results = model(np_images)
-    logger.info("YOLO model inference on %d images done in %.3fs", len(np_images), time.time() - t0)
+# def batch_detect_images(model, pil_images: List[Image.Image]):
+#     logger.debug("batch_detect_images called with %d images", len(pil_images))
+#     np_images = [np.array(img.convert('RGB')) for img in pil_images]
+#     for i, np_img in enumerate(np_images):
+#         logger.debug("Image[%d] shape: %s dtype=%s", i, np_img.shape, np_img.dtype)
+#     t0 = time.time()
+#     results = model(np_images)
+#     logger.info("YOLO model inference on %d images done in %.3fs", len(np_images), time.time() - t0)
+#     all_detected_classes = []
+#     all_boxes = []
+#     for img_idx, result in enumerate(results):
+#         detected_classes = set()
+#         boxes = []
+#         try:
+#             box_count = len(result.boxes)
+#         except Exception:
+#             # For compatibility: check attributes
+#             box_count = getattr(result.boxes, "xyxy", []).shape[0] if getattr(result.boxes, "xyxy", None) is not None else 0
+#         logger.debug("Image[%d] detected %d boxes", img_idx, box_count)
+#         for i, cls_idx in enumerate(result.boxes.cls):
+#             cls_idx = int(cls_idx)
+#             cls_name = CLASS_NAMES[cls_idx] if cls_idx < len(CLASS_NAMES) else f"unknown_{cls_idx}"
+#             detected_classes.add(cls_name)
+#             xyxy = result.boxes.xyxy[i].cpu().numpy()
+#             boxes.append((cls_idx, xyxy))
+#             logger.debug("Image[%d] box[%d] cls=%s xyxy=%s", img_idx, i, cls_name, xyxy.tolist())
+#         all_detected_classes.append(list(detected_classes))
+#         all_boxes.append(boxes)
+#     return all_detected_classes, all_boxes
+
+def batch_detect_images(model, pil_images: List[Image.Image], batch_size: int = 4):
+    logger.debug("batch_detect_images called with %d images (batch_size=%d)", len(pil_images), batch_size)
     all_detected_classes = []
     all_boxes = []
-    for img_idx, result in enumerate(results):
-        detected_classes = set()
-        boxes = []
-        try:
-            box_count = len(result.boxes)
-        except Exception:
-            # For compatibility: check attributes
-            box_count = getattr(result.boxes, "xyxy", []).shape[0] if getattr(result.boxes, "xyxy", None) is not None else 0
-        logger.debug("Image[%d] detected %d boxes", img_idx, box_count)
-        for i, cls_idx in enumerate(result.boxes.cls):
-            cls_idx = int(cls_idx)
-            cls_name = CLASS_NAMES[cls_idx] if cls_idx < len(CLASS_NAMES) else f"unknown_{cls_idx}"
-            detected_classes.add(cls_name)
-            xyxy = result.boxes.xyxy[i].cpu().numpy()
-            boxes.append((cls_idx, xyxy))
-            logger.debug("Image[%d] box[%d] cls=%s xyxy=%s", img_idx, i, cls_name, xyxy.tolist())
-        all_detected_classes.append(list(detected_classes))
-        all_boxes.append(boxes)
-    return all_detected_classes, all_boxes
 
+    t_total = time.time()
+    for start in range(0, len(pil_images), batch_size):
+        end = min(start + batch_size, len(pil_images))
+        batch = pil_images[start:end]
+
+        np_images = [np.array(img.convert("RGB")) for img in batch]
+        for i, np_img in enumerate(np_images):
+            logger.debug(
+                "Image[%d] shape: %s dtype=%s",
+                start + i, np_img.shape, np_img.dtype
+            )
+
+        t0 = time.time()
+        results = model(np_images)
+        logger.info(
+            "YOLO inference on images[%d:%d] done in %.3fs",
+            start, end, time.time() - t0
+        )
+
+        # Gộp kết quả batch vào list chung
+        for img_idx, result in enumerate(results):
+            global_idx = start + img_idx
+            detected_classes = set()
+            boxes = []
+
+            try:
+                box_count = len(result.boxes)
+            except Exception:
+                box_count = getattr(result.boxes, "xyxy", []).shape[0] if getattr(result.boxes, "xyxy", None) is not None else 0
+
+            logger.debug("Image[%d] detected %d boxes", global_idx, box_count)
+
+            for i, cls_idx in enumerate(result.boxes.cls):
+                cls_idx = int(cls_idx)
+                cls_name = CLASS_NAMES[cls_idx] if cls_idx < len(CLASS_NAMES) else f"unknown_{cls_idx}"
+                detected_classes.add(cls_name)
+                xyxy = result.boxes.xyxy[i].cpu().numpy()
+                boxes.append((cls_idx, xyxy))
+                logger.debug(
+                    "Image[%d] box[%d] cls=%s xyxy=%s",
+                    global_idx, i, cls_name, xyxy.tolist()
+                )
+
+            all_detected_classes.append(list(detected_classes))
+            all_boxes.append(boxes)
+
+        # Giải phóng batch khỏi RAM
+        del np_images
+        del results
+
+    logger.info(
+        "YOLO model inference on %d images (batch_size=%d) done in %.3fs",
+        len(pil_images), batch_size, time.time() - t_total
+    )
+    return all_detected_classes, all_boxes
+    
 def save_yolo_structure(images: List[Image.Image], basename: str, model, out_root: str):
     logger.info("Saving YOLO structure to '%s' (basename=%s)", out_root, basename)
     remove_folder_if_exists(out_root)
